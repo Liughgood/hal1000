@@ -1,0 +1,101 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0001-chat-conversation
+      author: hal1000
+      changes:
+        - createTable:
+            tableName: chat_conversation
+            columns:
+              - column:
+                  name: id
+                  type: varchar(36)
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: title
+                  type: varchar(255)
+                  constraints:
+                    nullable: true
+              - column:
+                  name: user_id
+                  type: varchar(64)
+                  constraints:
+                    nullable: true
+              - column:
+                  name: created_at
+                  type: bigint
+                  constraints:
+                    nullable: false
+              - column:
+                  name: updated_at
+                  type: bigint
+                  constraints:
+                    nullable: false
+
+  - changeSet:
+      id: 0002-chat-message
+      author: hal1000
+      changes:
+        - createTable:
+            tableName: chat_message
+            columns:
+              - column:
+                  name: id
+                  type: varchar(36)
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: conversation_id
+                  type: varchar(36)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: role
+                  type: varchar(16)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: content
+                  type: clob
+                  constraints:
+                    nullable: false
+              - column:
+                  name: model
+                  type: varchar(128)
+                  constraints:
+                    nullable: true
+              - column:
+                  name: prompt_tokens
+                  type: integer
+                  constraints:
+                    nullable: true
+              - column:
+                  name: completion_tokens
+                  type: integer
+                  constraints:
+                    nullable: true
+              - column:
+                  name: total_tokens
+                  type: integer
+                  constraints:
+                    nullable: true
+              - column:
+                  name: created_at
+                  type: bigint
+                  constraints:
+                    nullable: false
+        # NOTE: SQLite does not support addForeignKeyConstraint in Liquibase (validation fails).
+        # We keep `conversation_id` as a plain column; referential integrity can be enforced in application logic,
+        # or enabled later when migrating to Postgres.
+
+        - createIndex:
+            tableName: chat_message
+            indexName: idx_chat_message_conversation_created
+            columns:
+              - column:
+                  name: conversation_id
+              - column:
+                  name: created_at
+

@@ -1,0 +1,33 @@
+spring:
+  docker:
+    compose:
+      enabled: false
+  application:
+    name: hal1000
+  datasource:
+    url: jdbc:sqlite:${HAL1000_DB_PATH:./hal1000.db}
+    driver-class-name: org.sqlite.JDBC
+  jpa:
+    database-platform: org.hibernate.community.dialect.SQLiteDialect
+    hibernate:
+      ddl-auto: none
+    open-in-view: false
+    properties:
+      hibernate:
+        format_sql: true
+  liquibase:
+    change-log: classpath:db/changelog/db.changelog-master.yaml
+    enabled: true
+
+logging:
+  level:
+    org.hibernate.SQL: info
+
+hal1000:
+  llm:
+    provider: ${HAL1000_LLM_PROVIDER:gemini}
+    base-url: ${HAL1000_LLM_BASE_URL:https://generativelanguage.googleapis.com}
+    api-key: ${HAL1000_LLM_API_KEY:}
+    model: ${HAL1000_LLM_MODEL:gemini-2.5-flash}
+    timeout-seconds: ${HAL1000_LLM_TIMEOUT_SECONDS:60}
+
