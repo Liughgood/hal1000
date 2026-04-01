@@ -1,0 +1,26 @@
+# VCS / IDE
+.git
+.gitignore
+.idea
+.vscode
+.DS_Store
+
+# Node / frontend
+frontend/node_modules
+frontend/.vite
+frontend/dist
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Gradle / Java
+.gradle
+build
+out
+*.iml
+
+# Docker
+.dockerignore
+.env
+*.tar
+

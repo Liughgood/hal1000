@@ -1,0 +1,23 @@
+version: "3.8"
+
+services:
+  hal1000:
+    build:
+      context: .
+    container_name: hal1000
+    ports:
+      - "8080:8080"
+      # If you prefer HTTP on 80 instead, use: "80:8080"
+    env_file:
+      - .env
+    environment:
+      # Ensure SQLite DB is persisted to the mounted volume
+      - HAL1000_DB_PATH=/data/hal1000.db
+      # Other HAL1000_* can be overridden in .env
+    volumes:
+      - hal1000_data:/data
+    restart: unless-stopped
+
+volumes:
+  hal1000_data:
+
