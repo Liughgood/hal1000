@@ -46,3 +46,29 @@ dependencies {
 tasks.named('test') {
     useJUnitPlatform()
 }
+
+def frontendDir = file("frontend")
+
+tasks.register('frontendInstall', Exec) {
+    group = "frontend"
+    description = "Install frontend dependencies."
+    workingDir = frontendDir
+    onlyIf { frontendDir.exists() }
+
+    // Prefer 'npm install' so builds don't fail when package-lock.json is not in sync.
+    commandLine "npm", "install", "--no-fund", "--no-audit"
+}
+
+tasks.register('frontendBuild', Exec) {
+    group = "frontend"
+    description = "Build frontend (Vite) into src/main/resources/static."
+    workingDir = frontendDir
+    onlyIf { frontendDir.exists() }
+    dependsOn 'frontendInstall'
+    commandLine "npm", "run", "build"
+}
+
+// Ensure backend resources include latest frontend build output
+tasks.named('processResources') {
+    dependsOn 'frontendBuild'
+}
