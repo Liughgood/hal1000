@@ -24,10 +24,6 @@ WORKDIR /home/gradle/src
 # Copy entire project (owner preserved)
 COPY --chown=gradle:gradle . .
 
-# Copy prebuilt frontend into Spring Boot static resources
-RUN mkdir -p src/main/resources/static && rm -rf src/main/resources/static/* && \
-    true
-COPY --from=frontend /app/frontend/dist/ ./src/main/resources/static/
 
 # Build fat jar; skip Gradle-integrated frontend since we already built it
 RUN ./gradlew --no-daemon clean bootJar -x frontendBuild
