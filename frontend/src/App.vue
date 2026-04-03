@@ -14,6 +14,32 @@ const isLoading = ref(false);
 
 const canSend = computed(() => input.value.trim().length > 0 && !isStreaming.value && !!activeConversationId.value);
 
+function genClientId(): string {
+  // Avoid `crypto.randomUUID()` because on some remote deployments the page is not a secure context
+  // (`window.isSecureContext === false`), where `crypto.randomUUID` can be undefined.
+  const g: any = globalThis as any;
+
+  const cryptoObj: any = g?.crypto;
+  if (cryptoObj && typeof cryptoObj.randomUUID === "function") {
+    return cryptoObj.randomUUID();
+  }
+
+  // RFC4122 v4: only when `getRandomValues` exists.
+  if (cryptoObj && typeof cryptoObj.getRandomValues === "function") {
+    const buf = new Uint8Array(16);
+    cryptoObj.getRandomValues(buf);
+    buf[6] = (buf[6] & 0x0f) | 0x40;
+    buf[8] = (buf[8] & 0x3f) | 0x80;
+    const hex = Array.from(buf)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+
+  // Last resort: prevents runtime crash even on very old/locked-down browsers.
+  return `id_${Math.random().toString(16).slice(2)}_${Date.now().toString(16)}`;
+}
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
@@ -84,8 +110,8 @@ async function send() {
   input.value = "";
 
   // optimistic append user msg
-  messages.value.push({ id: crypto.randomUUID(), role: "user", content });
-  const assistantMsg: Message = { id: crypto.randomUUID(), role: "assistant", content: "" };
+  messages.value.push({ id: genClientId(), role: "user", content });
+  const assistantMsg: Message = { id: genClientId(), role: "assistant", content: "" };
   messages.value.push(assistantMsg);
   await nextTick();
   scrollToBottom();
