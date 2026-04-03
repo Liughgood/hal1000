@@ -6,7 +6,7 @@ services:
       context: .
     container_name: hal1000
     ports:
-      - "8080:8080"
+      - "80:8080"
       # If you prefer HTTP on 80 instead, use: "80:8080"
     env_file:
       - .env
