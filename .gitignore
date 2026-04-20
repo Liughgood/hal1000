@@ -54,3 +54,6 @@ hal1000.db
 /frontend/pnpm-debug.log*
 /frontend/.env
 /frontend/.env.*.local
+
+# environment variables
+.env
