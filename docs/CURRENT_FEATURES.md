@@ -49,7 +49,7 @@
 - **启用时**：[`VectorRagContextAugmentor`](../src/main/java/com/genhao/hal1000/rag/VectorRagContextAugmentor.java) 按会话从表 `rag_chunk` 加载向量，对用户当前句做 **embedding**，**余弦相似度 Top‑K**，将带 `[1]`… 编号与文档名的摘录写入额外 **system** 消息，并要求模型在回答中用相同编号引用。
 - **入库**：[`RagIngestionService`](../src/main/java/com/genhao/hal1000/rag/RagIngestionService.java) 分块（字符窗口 + 重叠，见 `hal1000.rag.chunk-*`），经 [`EmbeddingClient`](../src/main/java/com/genhao/hal1000/rag/embedding/EmbeddingClient.java) 实现（`openai` → `/v1/embeddings`，`gemini` → Generative Language `embedContent` / `batchEmbedContents`）写入 **float32 小端 BLOB**。
 - **配置**：[`application.yaml`](../src/main/resources/application.yaml) 中 `hal1000.rag.*`；`embedding-base-url` / `embedding-api-key` 为空时回退到 `hal1000.llm`；**启用 RAG 时必须配置可用的 embedding 密钥**（与聊天 provider 可不同）。
-- **局限（当前迭代）**：PDF 仅提取**可选中文本层**（扫描版/纯图 PDF 可能无字可抽）；URL 入库在 `Content-Type` 或路径含 `.pdf` 时同样走 PDF 解析；索引为**同步**；无 SSE 返回「本次引用列表」；仅会话级知识库；若更换 embedding 模型维度，旧块与查询向量维度不一致时会被跳过。
+- **局限（当前迭代）**：PDF 仅提取**可选中文本层**（扫描版/纯图 PDF 可能无字可抽）；URL 入库在 `Content-Type` 或路径含 `.pdf` 时同样走 PDF 解析；索引为**异步**（上传/URL 先返回 `status=processing`，后台完成后变 `ready` 或 `failed`）；无 SSE 返回「本次引用列表」；仅会话级知识库；大文档会被配置项 `hal1000.rag.max-extract-chars` / `hal1000.rag.max-chunks` 截断；若更换 embedding 模型维度，旧块与查询向量维度不一致时会被跳过。
 
 ### 6. 安全与鉴权
 

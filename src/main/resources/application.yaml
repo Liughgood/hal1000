@@ -4,8 +4,8 @@ spring:
       enabled: false
   servlet:
     multipart:
-      max-file-size: 10MB
-      max-request-size: 12MB
+      max-file-size: 50MB
+      max-request-size: 60MB
   application:
     name: hal1000
   datasource:
@@ -23,11 +23,22 @@ spring:
     change-log: classpath:db/changelog/db.changelog-master.yaml
     enabled: true
 
+server:
+  tomcat:
+    # Allow larger request bodies for multipart uploads (PDFs).
+    max-swallow-size: 60MB
+
 logging:
   level:
     org.hibernate.SQL: info
 
 hal1000:
+  auth:
+    jwt-secret: ${HAL1000_AUTH_JWT_SECRET:}
+    jwt-issuer: ${HAL1000_AUTH_JWT_ISSUER:hal1000}
+    frontend-redirect-url: ${HAL1000_AUTH_FRONTEND_REDIRECT_URL:http://localhost:5173/}
+    github-client-id: ${HAL1000_GITHUB_CLIENT_ID:}
+    github-client-secret: ${HAL1000_GITHUB_CLIENT_SECRET:}
   llm:
     provider: ${HAL1000_LLM_PROVIDER:gemini}
     base-url: ${HAL1000_LLM_BASE_URL:https://generativelanguage.googleapis.com}
@@ -42,6 +53,8 @@ hal1000:
     chunk-overlap-chars: ${HAL1000_RAG_CHUNK_OVERLAP_CHARS:200}
     max-url-bytes: ${HAL1000_RAG_MAX_URL_BYTES:2000000}
     embedding-batch-size: ${HAL1000_RAG_EMBEDDING_BATCH_SIZE:16}
+    max-extract-chars: ${HAL1000_RAG_MAX_EXTRACT_CHARS:1000000}
+    max-chunks: ${HAL1000_RAG_MAX_CHUNKS:2000}
     embedding-provider: ${HAL1000_RAG_EMBEDDING_PROVIDER:openai}
     embedding-model: ${HAL1000_RAG_EMBEDDING_MODEL:}
     embedding-base-url: ${HAL1000_RAG_EMBEDDING_BASE_URL:}

@@ -1,6 +1,5 @@
 package com.genhao.hal1000.rag;
 
-import com.genhao.hal1000.persistence.entity.rag.RagChunkEntity;
 import com.genhao.hal1000.persistence.entity.rag.RagDocumentEntity;
 import com.genhao.hal1000.persistence.entity.rag.RagDocumentStatus;
 import com.genhao.hal1000.persistence.entity.rag.RagSourceType;
@@ -8,22 +7,21 @@ import com.genhao.hal1000.persistence.repo.ChatConversationRepository;
 import com.genhao.hal1000.persistence.repo.RagChunkRepository;
 import com.genhao.hal1000.persistence.repo.RagDocumentRepository;
 import com.genhao.hal1000.rag.embedding.EmbeddingClient;
-import com.genhao.hal1000.rag.util.FloatEmbeddingCodec;
 import com.genhao.hal1000.rag.util.PdfTextExtractor;
-import com.genhao.hal1000.rag.util.TextChunker;
 import org.jsoup.Jsoup;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpHeaders;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.reactive.function.client.ExchangeStrategies;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.List;
 
 @Service
 @ConditionalOnProperty(name = "hal1000.rag.enabled", havingValue = "true")
@@ -35,19 +33,22 @@ public class RagIngestionService {
     private final RagChunkRepository chunkRepository;
     private final ChatConversationRepository conversationRepository;
     private final WebClient urlFetchClient;
+    private final RagIndexingWorker indexingWorker;
 
     public RagIngestionService(
             RagProperties ragProperties,
             EmbeddingClient embeddingClient,
             RagDocumentRepository documentRepository,
             RagChunkRepository chunkRepository,
-            ChatConversationRepository conversationRepository
+            ChatConversationRepository conversationRepository,
+            RagIndexingWorker indexingWorker
     ) {
         this.ragProperties = ragProperties;
         this.embeddingClient = embeddingClient;
         this.documentRepository = documentRepository;
         this.chunkRepository = chunkRepository;
         this.conversationRepository = conversationRepository;
+        this.indexingWorker = indexingWorker;
         int max = Math.max(64_000, ragProperties.getMaxUrlBytes());
         var strategies = ExchangeStrategies.builder()
                 .codecs(c -> c.defaultCodecs().maxInMemorySize(max))
@@ -56,8 +57,8 @@ public class RagIngestionService {
     }
 
     @Transactional
-    public RagDocumentEntity ingestUpload(String conversationId, MultipartFile file) {
-        requireConversation(conversationId);
+    public RagDocumentEntity ingestUpload(String userId, String conversationId, MultipartFile file) {
+        requireConversationOwned(userId, conversationId);
         if (file == null || file.isEmpty()) {
             throw new IllegalArgumentException("empty file");
         }
@@ -84,12 +85,12 @@ public class RagIngestionService {
         } catch (java.io.IOException e) {
             throw new IllegalArgumentException("读取上传文件失败: " + e.getMessage());
         }
-        return indexText(conversationId, name, RagSourceType.upload, null, mime, raw);
+        return createAndEnqueue(conversationId, name, RagSourceType.upload, null, mime, raw);
     }
 
     @Transactional
-    public RagDocumentEntity ingestUrl(String conversationId, String url) {
-        requireConversation(conversationId);
+    public RagDocumentEntity ingestUrl(String userId, String conversationId, String url) {
+        requireConversationOwned(userId, conversationId);
         URI uri = parseHttpUrl(url);
         var resp = urlFetchClient.get()
                 .uri(uri)
@@ -112,7 +113,7 @@ public class RagIngestionService {
         if (filename.length() > 500) {
             filename = filename.substring(0, 500);
         }
-        return indexText(conversationId, filename, RagSourceType.url, url, mime, raw);
+        return createAndEnqueue(conversationId, filename, RagSourceType.url, url, mime, raw);
     }
 
     private static URI parseHttpUrl(String url) {
@@ -148,7 +149,7 @@ public class RagIngestionService {
         return s;
     }
 
-    private RagDocumentEntity indexText(
+    private RagDocumentEntity createAndEnqueue(
             String conversationId,
             String filename,
             RagSourceType sourceType,
@@ -156,54 +157,45 @@ public class RagIngestionService {
             String mimeType,
             String rawText
     ) {
-        var chunks = TextChunker.chunk(rawText, ragProperties.getChunkSizeChars(), ragProperties.getChunkOverlapChars());
-        if (chunks.isEmpty()) {
-            throw new IllegalArgumentException("no text to index");
-        }
-
         var doc = new RagDocumentEntity();
         doc.setConversationId(conversationId);
         doc.setFilename(filename);
         doc.setSourceType(sourceType);
         doc.setSourceUrl(sourceUrl);
         doc.setMimeType(mimeType);
-        doc.setStatus(RagDocumentStatus.ready);
+        doc.setStatus(RagDocumentStatus.processing);
         doc.setErrorMessage(null);
         documentRepository.save(doc);
-
-        List<float[]> vectors = embeddingClient.embed(chunks);
-        if (vectors.size() != chunks.size()) {
-            throw new IllegalStateException("embedding count mismatch");
+        // Run async indexing only AFTER the current transaction commits; otherwise the async thread may not see
+        // the newly inserted rag_document row and would exit early, leaving status stuck at processing.
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            final String docId = doc.getId();
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    indexingWorker.indexDocument(docId, conversationId, rawText);
+                }
+            });
+        } else {
+            indexingWorker.indexDocument(doc.getId(), conversationId, rawText);
         }
-
-        var entities = new ArrayList<RagChunkEntity>(chunks.size());
-        for (int i = 0; i < chunks.size(); i++) {
-            float[] vec = vectors.get(i);
-            var ch = new RagChunkEntity();
-            ch.setDocumentId(doc.getId());
-            ch.setConversationId(conversationId);
-            ch.setChunkIndex(i);
-            ch.setText(chunks.get(i));
-            ch.setEmbeddingDim(vec.length);
-            ch.setEmbedding(FloatEmbeddingCodec.floatsToBytesLittleEndian(vec));
-            entities.add(ch);
-        }
-        chunkRepository.saveAll(entities);
         return doc;
     }
 
     @Transactional
-    public void deleteDocument(String conversationId, String documentId) {
-        requireConversation(conversationId);
+    public void deleteDocument(String userId, String conversationId, String documentId) {
+        requireConversationOwned(userId, conversationId);
         var doc = documentRepository.findByIdAndConversationId(documentId, conversationId)
                 .orElseThrow(() -> new IllegalArgumentException("document not found"));
         chunkRepository.deleteByDocumentId(doc.getId());
         documentRepository.delete(doc);
     }
 
-    private void requireConversation(String conversationId) {
-        if (!conversationRepository.existsById(conversationId)) {
-            throw new IllegalArgumentException("conversation not found: " + conversationId);
+    private void requireConversationOwned(String userId, String conversationId) {
+        var convo = conversationRepository.findById(conversationId)
+                .orElseThrow(() -> new IllegalArgumentException("conversation not found: " + conversationId));
+        if (convo.getUserId() == null || !convo.getUserId().equals(userId)) {
+            throw new AccessDeniedException("conversation not owned");
         }
     }
 

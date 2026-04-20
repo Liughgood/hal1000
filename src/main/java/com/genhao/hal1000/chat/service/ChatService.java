@@ -7,6 +7,7 @@ import com.genhao.hal1000.persistence.entity.ChatRole;
 import com.genhao.hal1000.persistence.repo.ChatConversationRepository;
 import com.genhao.hal1000.persistence.repo.ChatMessageRepository;
 import com.genhao.hal1000.rag.ContextAugmentor;
+import org.springframework.security.access.AccessDeniedException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -38,30 +39,34 @@ public class ChatService {
     }
 
     @Transactional
-    public ChatConversationEntity createConversation() {
+    public ChatConversationEntity createConversation(String userId) {
         var c = new ChatConversationEntity();
         c.setTitle(null);
-        c.setUserId(null);
+        c.setUserId(userId);
         return conversationRepo.save(c);
     }
 
-    public List<ChatConversationEntity> listConversations() {
-        var all = conversationRepo.findAll();
+    public List<ChatConversationEntity> listConversations(String userId) {
+        var all = conversationRepo.findByUserId(userId);
         all.sort(Comparator.comparing(ChatConversationEntity::getUpdatedAt).reversed());
         return all;
     }
 
-    public List<ChatMessageEntity> listMessages(String conversationId) {
+    public List<ChatMessageEntity> listMessages(String userId, String conversationId) {
+        requireConversationOwned(userId, conversationId);
         return messageRepo.findByConversation_IdOrderByCreatedAtAsc(conversationId);
     }
 
     @Transactional
-    public Flux<LlmGateway.StreamEvent> streamReply(String conversationId, String userContent) {
+    public Flux<LlmGateway.StreamEvent> streamReply(String userId, String conversationId, String userContent) {
         var metrics = new RequestMetrics();
         metrics.setStartedAtMs(System.currentTimeMillis());
 
         var convo = conversationRepo.findById(conversationId)
                 .orElseThrow(() -> new IllegalArgumentException("conversation not found: " + conversationId));
+        if (convo.getUserId() == null || !convo.getUserId().equals(userId)) {
+            throw new AccessDeniedException("conversation not owned");
+        }
 
         var userMsg = new ChatMessageEntity();
         userMsg.setConversation(convo);
@@ -117,6 +122,14 @@ public class ChatService {
                     log.info("chat.stream.done conversationId={} latencyMs={} ttfbMs={} tokensTotal={}",
                             conversationId, metrics.getLatencyMs(), metrics.getTtfbMs(), metrics.getTotalTokens());
                 });
+    }
+
+    private void requireConversationOwned(String userId, String conversationId) {
+        var convo = conversationRepo.findById(conversationId)
+                .orElseThrow(() -> new IllegalArgumentException("conversation not found: " + conversationId));
+        if (convo.getUserId() == null || !convo.getUserId().equals(userId)) {
+            throw new AccessDeniedException("conversation not owned");
+        }
     }
 }
 

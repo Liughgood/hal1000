@@ -1,6 +1,7 @@
 package com.genhao.hal1000.chat.web;
 
 import com.genhao.hal1000.chat.service.ChatService;
+import com.genhao.hal1000.auth.CurrentUser;
 import com.genhao.hal1000.llm.LlmErrorUtil;
 import com.genhao.hal1000.llm.LlmGateway;
 import com.genhao.hal1000.persistence.entity.ChatConversationEntity;
@@ -24,24 +25,26 @@ import java.util.Map;
 public class ChatApiController {
 
     private final ChatService chatService;
+    private final CurrentUser currentUser;
 
-    public ChatApiController(ChatService chatService) {
+    public ChatApiController(ChatService chatService, CurrentUser currentUser) {
         this.chatService = chatService;
+        this.currentUser = currentUser;
     }
 
     @PostMapping("/conversations")
     public ChatConversationEntity createConversation() {
-        return chatService.createConversation();
+        return chatService.createConversation(currentUser.requireUserId());
     }
 
     @GetMapping("/conversations")
     public List<ChatConversationEntity> listConversations() {
-        return chatService.listConversations();
+        return chatService.listConversations(currentUser.requireUserId());
     }
 
     @GetMapping("/conversations/{id}/messages")
     public List<MessageDto> listMessages(@PathVariable("id") String conversationId) {
-        var entities = chatService.listMessages(conversationId);
+        var entities = chatService.listMessages(currentUser.requireUserId(), conversationId);
         var out = new ArrayList<MessageDto>(entities.size());
         for (var m : entities) {
             out.add(MessageDto.from(m));
@@ -80,7 +83,7 @@ public class ChatApiController {
     public SseEmitter stream(@PathVariable("id") String conversationId, @RequestBody StreamRequest req) {
         var emitter = new SseEmitter(0L);
         try {
-            chatService.streamReply(conversationId, req.content())
+            chatService.streamReply(currentUser.requireUserId(), conversationId, req.content())
                     .subscribe(
                             evt -> sendDelta(emitter, evt),
                             err -> {

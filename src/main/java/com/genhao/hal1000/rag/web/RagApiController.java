@@ -1,5 +1,6 @@
 package com.genhao.hal1000.rag.web;
 
+import com.genhao.hal1000.auth.CurrentUser;
 import com.genhao.hal1000.persistence.entity.rag.RagDocumentEntity;
 import com.genhao.hal1000.persistence.repo.ChatConversationRepository;
 import com.genhao.hal1000.persistence.repo.RagChunkRepository;
@@ -30,17 +31,20 @@ public class RagApiController {
     private final RagDocumentRepository documentRepository;
     private final RagChunkRepository chunkRepository;
     private final ChatConversationRepository conversationRepository;
+    private final CurrentUser currentUser;
 
     public RagApiController(
             RagIngestionService ingestionService,
             RagDocumentRepository documentRepository,
             RagChunkRepository chunkRepository,
-            ChatConversationRepository conversationRepository
+            ChatConversationRepository conversationRepository,
+            CurrentUser currentUser
     ) {
         this.ingestionService = ingestionService;
         this.documentRepository = documentRepository;
         this.chunkRepository = chunkRepository;
         this.conversationRepository = conversationRepository;
+        this.currentUser = currentUser;
     }
 
     @PostMapping(path = "/{conversationId}/documents", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -49,7 +53,7 @@ public class RagApiController {
             @RequestParam("file") MultipartFile file
     ) {
         try {
-            var doc = ingestionService.ingestUpload(conversationId, file);
+            var doc = ingestionService.ingestUpload(currentUser.requireUserId(), conversationId, file);
             return toDto(doc);
         } catch (IllegalArgumentException e) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
@@ -64,7 +68,7 @@ public class RagApiController {
             @RequestBody FromUrlRequest body
     ) {
         try {
-            var doc = ingestionService.ingestUrl(conversationId, body.url());
+            var doc = ingestionService.ingestUrl(currentUser.requireUserId(), conversationId, body.url());
             return toDto(doc);
         } catch (IllegalArgumentException e) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
@@ -75,7 +79,7 @@ public class RagApiController {
 
     @GetMapping("/{conversationId}/documents")
     public List<RagDocumentDto> list(@PathVariable("conversationId") String conversationId) {
-        requireConversation(conversationId);
+        requireConversationOwned(conversationId);
         return documentRepository.findByConversationIdOrderByCreatedAtDesc(conversationId).stream()
                 .map(this::toDto)
                 .toList();
@@ -87,15 +91,18 @@ public class RagApiController {
             @PathVariable("documentId") String documentId
     ) {
         try {
-            ingestionService.deleteDocument(conversationId, documentId);
+            ingestionService.deleteDocument(currentUser.requireUserId(), conversationId, documentId);
         } catch (IllegalArgumentException e) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, e.getMessage());
         }
     }
 
-    private void requireConversation(String conversationId) {
-        if (!conversationRepository.existsById(conversationId)) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "conversation not found");
+    private void requireConversationOwned(String conversationId) {
+        var convo = conversationRepository.findById(conversationId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "conversation not found"));
+        var userId = currentUser.requireUserId();
+        if (convo.getUserId() == null || !convo.getUserId().equals(userId)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "conversation not owned");
         }
     }
 
@@ -108,7 +115,8 @@ public class RagApiController {
                 d.getSourceUrl(),
                 d.getStatus().name(),
                 d.getCreatedAt(),
-                chunks
+                chunks,
+                d.getErrorMessage()
         );
     }
 
@@ -122,7 +130,8 @@ public class RagApiController {
             String sourceUrl,
             String status,
             Long createdAt,
-            long chunkCount
+            long chunkCount,
+            String errorMessage
     ) {
     }
 }

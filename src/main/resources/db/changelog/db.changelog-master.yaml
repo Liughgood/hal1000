@@ -206,3 +206,61 @@ databaseChangeLog:
               - column:
                   name: conversation_id
 
+  - changeSet:
+      id: 0004-app-user
+      author: hal1000
+      changes:
+        - createTable:
+            tableName: app_user
+            columns:
+              - column:
+                  name: id
+                  type: varchar(36)
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: github_id
+                  type: bigint
+                  constraints:
+                    nullable: false
+              - column:
+                  name: github_login
+                  type: varchar(128)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: name
+                  type: varchar(255)
+                  constraints:
+                    nullable: true
+              - column:
+                  name: avatar_url
+                  type: varchar(2048)
+                  constraints:
+                    nullable: true
+              - column:
+                  name: created_at
+                  type: bigint
+                  constraints:
+                    nullable: false
+              - column:
+                  name: updated_at
+                  type: bigint
+                  constraints:
+                    nullable: false
+        - createIndex:
+            tableName: app_user
+            indexName: uq_app_user_github_id
+            unique: true
+            columns:
+              - column:
+                  name: github_id
+        - createIndex:
+            tableName: app_user
+            indexName: uq_app_user_github_login
+            unique: true
+            columns:
+              - column:
+                  name: github_login
+

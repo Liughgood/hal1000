@@ -14,6 +14,8 @@ public class RagProperties {
     private int chunkOverlapChars = 200;
     private int maxUrlBytes = 2_000_000;
     private int embeddingBatchSize = 16;
+    private int maxExtractChars = 1_000_000;
+    private int maxChunks = 2000;
 
     /**
      * openai | gemini — independent of chat LLM provider.

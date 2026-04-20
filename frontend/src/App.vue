@@ -11,7 +11,10 @@ type RagDoc = {
   status: string;
   createdAt: number;
   chunkCount: number;
+  errorMessage?: string | null;
 };
+
+type Me = { id: string; githubLogin: string; name?: string | null; avatarUrl?: string | null };
 
 const conversations = ref<Conversation[]>([]);
 const activeConversationId = ref<string | null>(null);
@@ -20,6 +23,9 @@ const input = ref("");
 const isStreaming = ref(false);
 const errorMsg = ref<string | null>(null);
 const isLoading = ref(false);
+
+const token = ref<string | null>(localStorage.getItem("hal1000_token"));
+const me = ref<Me | null>(null);
 
 const ragAvailable = ref<boolean | null>(null);
 const ragDocs = ref<RagDoc[]>([]);
@@ -59,6 +65,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: {
       "Content-Type": "application/json",
+      ...(token.value ? { Authorization: `Bearer ${token.value}` } : {}),
       ...(init?.headers || {}),
     },
   });
@@ -66,6 +73,36 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(`${res.status} ${res.statusText}`);
   }
   return (await res.json()) as T;
+}
+
+function startGitHubLogin() {
+  window.location.href = "/api/auth/github/start";
+}
+
+function maybeConsumeTokenFromUrl() {
+  const url = new URL(window.location.href);
+  const t = url.searchParams.get("token");
+  if (t && t.trim().length > 0) {
+    token.value = t;
+    localStorage.setItem("hal1000_token", t);
+    url.searchParams.delete("token");
+    window.history.replaceState({}, "", url.toString());
+  }
+}
+
+async function loadMe() {
+  if (!token.value) {
+    me.value = null;
+    return;
+  }
+  try {
+    me.value = await api<Me>("/api/auth/me");
+  } catch {
+    // token invalid/expired
+    token.value = null;
+    me.value = null;
+    localStorage.removeItem("hal1000_token");
+  }
 }
 
 async function loadConversations() {
@@ -79,7 +116,11 @@ async function loadConversations() {
       await loadRagDocuments();
     }
   } catch (e: any) {
-    errorMsg.value = `加载会话失败：${e?.message ?? String(e)}`;
+    if ((e?.message ?? "").includes("401")) {
+      errorMsg.value = `请先登录（GitHub）`;
+    } else {
+      errorMsg.value = `加载会话失败：${e?.message ?? String(e)}`;
+    }
   } finally {
     isLoading.value = false;
   }
@@ -112,7 +153,9 @@ async function loadRagDocuments() {
   if (!activeConversationId.value) return;
   isRagLoading.value = true;
   try {
-    const res = await fetch(`/api/conversations/${activeConversationId.value}/documents`);
+    const res = await fetch(`/api/conversations/${activeConversationId.value}/documents`, {
+      headers: token.value ? { Authorization: `Bearer ${token.value}` } : undefined,
+    });
     if (res.status === 404) {
       ragAvailable.value = false;
       ragDocs.value = [];
@@ -140,6 +183,7 @@ async function uploadRagFile(ev: Event) {
     fd.append("file", file);
     const res = await fetch(`/api/conversations/${activeConversationId.value}/documents`, {
       method: "POST",
+      headers: token.value ? { Authorization: `Bearer ${token.value}` } : undefined,
       body: fd,
     });
     if (!res.ok) {
@@ -147,6 +191,10 @@ async function uploadRagFile(ev: Event) {
       throw new Error(t || `${res.status}`);
     }
     await loadRagDocuments();
+    // Fire-and-forget status refresh while background indexing runs.
+    setTimeout(loadRagDocuments, 1500);
+    setTimeout(loadRagDocuments, 4000);
+    setTimeout(loadRagDocuments, 9000);
   } catch (e: any) {
     errorMsg.value = `上传知识库失败：${e?.message ?? String(e)}`;
   } finally {
@@ -163,7 +211,10 @@ async function submitRagUrl() {
   try {
     const res = await fetch(`/api/conversations/${activeConversationId.value}/documents/from-url`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(token.value ? { Authorization: `Bearer ${token.value}` } : {}),
+      },
       body: JSON.stringify({ url }),
     });
     if (!res.ok) {
@@ -172,6 +223,9 @@ async function submitRagUrl() {
     }
     ragUrl.value = "";
     await loadRagDocuments();
+    setTimeout(loadRagDocuments, 1500);
+    setTimeout(loadRagDocuments, 4000);
+    setTimeout(loadRagDocuments, 9000);
   } catch (e: any) {
     errorMsg.value = `URL 入库失败：${e?.message ?? String(e)}`;
   } finally {
@@ -186,6 +240,7 @@ async function deleteRagDoc(id: string) {
   try {
     const res = await fetch(`/api/conversations/${activeConversationId.value}/documents/${id}`, {
       method: "DELETE",
+      headers: token.value ? { Authorization: `Bearer ${token.value}` } : undefined,
     });
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
     await loadRagDocuments();
@@ -224,7 +279,10 @@ async function send() {
   try {
     const res = await fetch(`/api/conversations/${activeConversationId.value}/stream`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(token.value ? { Authorization: `Bearer ${token.value}` } : {}),
+      },
       body: JSON.stringify({ content }),
     });
     if (!res.ok || !res.body) throw new Error(`${res.status} ${res.statusText}`);
@@ -277,6 +335,8 @@ async function send() {
 }
 
 onMounted(async () => {
+  maybeConsumeTokenFromUrl();
+  await loadMe();
   await loadConversations();
   if (!activeConversationId.value) {
     await createConversation();
@@ -290,7 +350,17 @@ onMounted(async () => {
     <aside class="sidebar">
       <div class="sidebarHeader">
         <div class="brand">HAL1000</div>
-        <button class="btn" @click="createConversation">新建会话</button>
+        <button class="btn" @click="createConversation" :disabled="!token">新建会话</button>
+      </div>
+      <div class="authRow">
+        <div v-if="me" class="me">
+          <img v-if="me.avatarUrl" class="avatar" :src="me.avatarUrl" alt="avatar" />
+          <div class="meText">
+            <div class="meLogin">{{ me.githubLogin }}</div>
+            <div class="meName" v-if="me.name">{{ me.name }}</div>
+          </div>
+        </div>
+        <button v-else class="btn" @click="startGitHubLogin">GitHub 登录</button>
       </div>
       <div class="list">
         <button
@@ -330,7 +400,10 @@ onMounted(async () => {
           <li v-for="d in ragDocs" :key="d.id" class="ragItem">
             <div class="ragItemMain">
               <div class="ragName">{{ d.filename }}</div>
-              <div class="ragMeta">{{ d.chunkCount }} 块 · {{ d.sourceType }}</div>
+              <div class="ragMeta">
+                {{ d.status }} · {{ d.chunkCount }} 块 · {{ d.sourceType }}
+                <span v-if="d.status === 'failed' && d.errorMessage"> · {{ d.errorMessage }}</span>
+              </div>
             </div>
             <button type="button" class="btn ragDel" :disabled="isRagLoading" @click="deleteRagDoc(d.id)">删除</button>
           </li>
@@ -388,6 +461,42 @@ onMounted(async () => {
   justify-content: space-between;
   gap: 8px;
   margin-bottom: 12px;
+}
+.authRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.me {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+.meText {
+  min-width: 0;
+}
+.meLogin {
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.meName {
+  font-size: 11px;
+  opacity: 0.6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .brand {
   font-weight: 700;
