@@ -74,7 +74,7 @@ public class ChatService {
         var llmMsgs = new ArrayList<LlmGateway.SimpleMessage>(history.size());
 
         // reserved for RAG (M1 no-op)
-        var extraSystem = contextAugmentor.augmentSystemPrompt(userContent);
+        var extraSystem = contextAugmentor.augmentSystemPrompt(conversationId, userContent);
         if (extraSystem != null && !extraSystem.isBlank()) {
             llmMsgs.add(new LlmGateway.SimpleMessage("system", extraSystem));
         }

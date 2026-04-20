@@ -99,3 +99,110 @@ databaseChangeLog:
               - column:
                   name: created_at
 
+  - changeSet:
+      id: 0003-rag-document-chunk
+      author: hal1000
+      changes:
+        - createTable:
+            tableName: rag_document
+            columns:
+              - column:
+                  name: id
+                  type: varchar(36)
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: conversation_id
+                  type: varchar(36)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: filename
+                  type: varchar(512)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: source_type
+                  type: varchar(16)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: source_url
+                  type: varchar(2048)
+                  constraints:
+                    nullable: true
+              - column:
+                  name: mime_type
+                  type: varchar(128)
+                  constraints:
+                    nullable: true
+              - column:
+                  name: created_at
+                  type: bigint
+                  constraints:
+                    nullable: false
+              - column:
+                  name: status
+                  type: varchar(16)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: error_message
+                  type: clob
+                  constraints:
+                    nullable: true
+        - createIndex:
+            tableName: rag_document
+            indexName: idx_rag_document_conversation
+            columns:
+              - column:
+                  name: conversation_id
+              - column:
+                  name: created_at
+        - createTable:
+            tableName: rag_chunk
+            columns:
+              - column:
+                  name: id
+                  type: varchar(36)
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: document_id
+                  type: varchar(36)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: conversation_id
+                  type: varchar(36)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: chunk_index
+                  type: int
+                  constraints:
+                    nullable: false
+              - column:
+                  name: text
+                  type: clob
+                  constraints:
+                    nullable: false
+              - column:
+                  name: embedding_dim
+                  type: int
+                  constraints:
+                    nullable: false
+              - column:
+                  name: embedding
+                  type: blob
+                  constraints:
+                    nullable: false
+        - createIndex:
+            tableName: rag_chunk
+            indexName: idx_rag_chunk_conversation
+            columns:
+              - column:
+                  name: conversation_id
+

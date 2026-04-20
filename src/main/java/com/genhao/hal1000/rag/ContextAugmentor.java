@@ -1,10 +1,9 @@
 package com.genhao.hal1000.rag;
 
 /**
- * RAG extension point.
- * For M1 this is a no-op, but ChatService can call it later without refactor.
+ * RAG extension point: injects extra system instructions (e.g. retrieved excerpts) before chat history.
  */
 public interface ContextAugmentor {
-    String augmentSystemPrompt(String userQuery);
+    String augmentSystemPrompt(String conversationId, String userQuery);
 }
 

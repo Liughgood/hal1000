@@ -5,7 +5,7 @@ import path from "node:path";
 export default defineConfig({
   plugins: [vue()],
   build: {
-    outDir: "dist",
+    outDir: "../src/main/resources/static",
     emptyOutDir: true,
   },
   server: {

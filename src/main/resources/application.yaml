@@ -2,6 +2,10 @@ spring:
   docker:
     compose:
       enabled: false
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 12MB
   application:
     name: hal1000
   datasource:
@@ -30,4 +34,16 @@ hal1000:
     api-key: ${HAL1000_LLM_API_KEY:}
     model: ${HAL1000_LLM_MODEL:gemini-2.5-flash}
     timeout-seconds: ${HAL1000_LLM_TIMEOUT_SECONDS:60}
+  rag:
+    enabled: ${HAL1000_RAG_ENABLED:false}
+    top-k: ${HAL1000_RAG_TOP_K:5}
+    max-prompt-chars: ${HAL1000_RAG_MAX_PROMPT_CHARS:6000}
+    chunk-size-chars: ${HAL1000_RAG_CHUNK_SIZE_CHARS:1200}
+    chunk-overlap-chars: ${HAL1000_RAG_CHUNK_OVERLAP_CHARS:200}
+    max-url-bytes: ${HAL1000_RAG_MAX_URL_BYTES:2000000}
+    embedding-batch-size: ${HAL1000_RAG_EMBEDDING_BATCH_SIZE:16}
+    embedding-provider: ${HAL1000_RAG_EMBEDDING_PROVIDER:openai}
+    embedding-model: ${HAL1000_RAG_EMBEDDING_MODEL:}
+    embedding-base-url: ${HAL1000_RAG_EMBEDDING_BASE_URL:}
+    embedding-api-key: ${HAL1000_RAG_EMBEDDING_API_KEY:}
 

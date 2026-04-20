@@ -3,6 +3,15 @@ import { computed, nextTick, onMounted, ref } from "vue";
 
 type Conversation = { id: string; title?: string | null; updatedAt?: string };
 type Message = { id: string; role: "user" | "assistant" | "system"; content: string; createdAt?: string };
+type RagDoc = {
+  id: string;
+  filename: string;
+  sourceType: string;
+  sourceUrl: string | null;
+  status: string;
+  createdAt: number;
+  chunkCount: number;
+};
 
 const conversations = ref<Conversation[]>([]);
 const activeConversationId = ref<string | null>(null);
@@ -11,6 +20,11 @@ const input = ref("");
 const isStreaming = ref(false);
 const errorMsg = ref<string | null>(null);
 const isLoading = ref(false);
+
+const ragAvailable = ref<boolean | null>(null);
+const ragDocs = ref<RagDoc[]>([]);
+const ragUrl = ref("");
+const isRagLoading = ref(false);
 
 const canSend = computed(() => input.value.trim().length > 0 && !isStreaming.value && !!activeConversationId.value);
 
@@ -62,6 +76,7 @@ async function loadConversations() {
     if (!activeConversationId.value && conversations.value.length > 0) {
       activeConversationId.value = conversations.value[0].id;
       await loadMessages();
+      await loadRagDocuments();
     }
   } catch (e: any) {
     errorMsg.value = `加载会话失败：${e?.message ?? String(e)}`;
@@ -78,6 +93,7 @@ async function createConversation() {
     conversations.value = [convo, ...conversations.value];
     activeConversationId.value = convo.id;
     messages.value = [];
+    await loadRagDocuments();
   } catch (e: any) {
     errorMsg.value = `新建会话失败：${e?.message ?? String(e)}`;
   } finally {
@@ -90,6 +106,94 @@ async function loadMessages() {
   messages.value = await api<Message[]>(`/api/conversations/${activeConversationId.value}/messages`);
   await nextTick();
   scrollToBottom();
+}
+
+async function loadRagDocuments() {
+  if (!activeConversationId.value) return;
+  isRagLoading.value = true;
+  try {
+    const res = await fetch(`/api/conversations/${activeConversationId.value}/documents`);
+    if (res.status === 404) {
+      ragAvailable.value = false;
+      ragDocs.value = [];
+      return;
+    }
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    ragAvailable.value = true;
+    ragDocs.value = (await res.json()) as RagDoc[];
+  } catch {
+    ragAvailable.value = false;
+    ragDocs.value = [];
+  } finally {
+    isRagLoading.value = false;
+  }
+}
+
+async function uploadRagFile(ev: Event) {
+  const el = ev.target as HTMLInputElement;
+  const file = el.files?.[0];
+  if (!file || !activeConversationId.value || ragAvailable.value !== true) return;
+  errorMsg.value = null;
+  isRagLoading.value = true;
+  try {
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch(`/api/conversations/${activeConversationId.value}/documents`, {
+      method: "POST",
+      body: fd,
+    });
+    if (!res.ok) {
+      const t = await res.text();
+      throw new Error(t || `${res.status}`);
+    }
+    await loadRagDocuments();
+  } catch (e: any) {
+    errorMsg.value = `上传知识库失败：${e?.message ?? String(e)}`;
+  } finally {
+    el.value = "";
+    isRagLoading.value = false;
+  }
+}
+
+async function submitRagUrl() {
+  const url = ragUrl.value.trim();
+  if (!url || !activeConversationId.value || ragAvailable.value !== true) return;
+  errorMsg.value = null;
+  isRagLoading.value = true;
+  try {
+    const res = await fetch(`/api/conversations/${activeConversationId.value}/documents/from-url`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    });
+    if (!res.ok) {
+      const t = await res.text();
+      throw new Error(t || `${res.status}`);
+    }
+    ragUrl.value = "";
+    await loadRagDocuments();
+  } catch (e: any) {
+    errorMsg.value = `URL 入库失败：${e?.message ?? String(e)}`;
+  } finally {
+    isRagLoading.value = false;
+  }
+}
+
+async function deleteRagDoc(id: string) {
+  if (!activeConversationId.value || ragAvailable.value !== true) return;
+  errorMsg.value = null;
+  isRagLoading.value = true;
+  try {
+    const res = await fetch(`/api/conversations/${activeConversationId.value}/documents/${id}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    await loadRagDocuments();
+  } catch (e: any) {
+    errorMsg.value = `删除文档失败：${e?.message ?? String(e)}`;
+  } finally {
+    isRagLoading.value = false;
+  }
 }
 
 function scrollToBottom() {
@@ -177,6 +281,7 @@ onMounted(async () => {
   if (!activeConversationId.value) {
     await createConversation();
   }
+  await loadRagDocuments();
 });
 </script>
 
@@ -196,10 +301,40 @@ onMounted(async () => {
           @click="
             activeConversationId = c.id;
             loadMessages();
+            loadRagDocuments();
           "
         >
           <div class="title">{{ c.title || c.id.slice(0, 8) }}</div>
         </button>
+      </div>
+
+      <div v-if="ragAvailable === true" class="ragPanel">
+        <div class="ragTitle">知识库</div>
+        <p class="ragHint">支持 .txt / .md / .pdf；URL 若为 PDF 或 HTML 会提取正文。</p>
+        <label class="ragFileWrap">
+          <span class="ragFileBtn">{{ isRagLoading ? "处理中…" : "上传文档" }}</span>
+          <input
+            class="ragFileInput"
+            type="file"
+            accept=".txt,.md,.pdf,text/plain,text/markdown,application/pdf"
+            :disabled="isRagLoading"
+            @change="uploadRagFile"
+          />
+        </label>
+        <div class="ragUrlRow">
+          <input v-model="ragUrl" class="ragUrlInput" type="url" placeholder="https://…" :disabled="isRagLoading" />
+          <button type="button" class="btn ragUrlBtn" :disabled="isRagLoading || !ragUrl.trim()" @click="submitRagUrl">添加 URL</button>
+        </div>
+        <div v-if="ragDocs.length === 0" class="ragEmpty">暂无文档</div>
+        <ul v-else class="ragList">
+          <li v-for="d in ragDocs" :key="d.id" class="ragItem">
+            <div class="ragItemMain">
+              <div class="ragName">{{ d.filename }}</div>
+              <div class="ragMeta">{{ d.chunkCount }} 块 · {{ d.sourceType }}</div>
+            </div>
+            <button type="button" class="btn ragDel" :disabled="isRagLoading" @click="deleteRagDoc(d.id)">删除</button>
+          </li>
+        </ul>
       </div>
     </aside>
 
@@ -377,6 +512,108 @@ onMounted(async () => {
   margin-bottom: 8px;
   color: #fca5a5;
   font-size: 12px;
+}
+.ragPanel {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  flex-shrink: 0;
+  max-height: 38vh;
+  overflow: auto;
+}
+.ragTitle {
+  font-weight: 600;
+  font-size: 13px;
+}
+.ragHint {
+  margin: 0;
+  font-size: 11px;
+  opacity: 0.65;
+  line-height: 1.35;
+}
+.ragFileWrap {
+  position: relative;
+  display: inline-block;
+}
+.ragFileBtn {
+  display: inline-block;
+  font-size: 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+}
+.ragFileInput {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.ragUrlRow {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.ragUrlInput {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.25);
+  color: #e6e8ef;
+}
+.ragUrlBtn {
+  flex-shrink: 0;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+.ragEmpty {
+  font-size: 12px;
+  opacity: 0.55;
+}
+.ragList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ragItem {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+.ragItemMain {
+  min-width: 0;
+}
+.ragName {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ragMeta {
+  font-size: 11px;
+  opacity: 0.55;
+  margin-top: 2px;
+}
+.ragDel {
+  flex-shrink: 0;
+  padding: 4px 8px;
+  font-size: 11px;
 }
 </style>
 
