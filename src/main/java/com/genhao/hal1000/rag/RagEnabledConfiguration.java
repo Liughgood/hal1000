@@ -8,6 +8,8 @@ import com.genhao.hal1000.rag.embedding.OpenAiEmbeddingClient;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.web.reactive.function.client.ExchangeStrategies;
+import org.springframework.web.reactive.function.client.WebClient;
 
 @Configuration
 @ConditionalOnProperty(name = "hal1000.rag.enabled", havingValue = "true")
@@ -40,21 +42,35 @@ public class RagEnabledConfiguration {
         if (model == null || model.isBlank()) {
             model = "gemini".equals(provider) ? "text-embedding-004" : "text-embedding-3-small";
         }
+        int maxBytes = Math.max(256_000, rag.getEmbeddingMaxResponseBytes());
+        var strategies = ExchangeStrategies.builder()
+                .codecs(c -> c.defaultCodecs().maxInMemorySize(maxBytes))
+                .build();
+        var webClient = WebClient.builder()
+                .baseUrl(base)
+                .exchangeStrategies(strategies)
+                .build();
         return switch (provider) {
             case "gemini" -> new GeminiEmbeddingClient(
-                    base,
+                    webClient,
                     key,
                     model,
                     timeout,
                     rag.getEmbeddingBatchSize(),
+                    rag.getEmbeddingRetryMaxAttempts(),
+                    rag.getEmbeddingRetryBaseDelayMs(),
+                    rag.getEmbeddingRetryMaxDelayMs(),
                     objectMapper
             );
             default -> new OpenAiEmbeddingClient(
-                    base,
+                    webClient,
                     key,
                     model,
                     timeout,
                     rag.getEmbeddingBatchSize(),
+                    rag.getEmbeddingRetryMaxAttempts(),
+                    rag.getEmbeddingRetryBaseDelayMs(),
+                    rag.getEmbeddingRetryMaxDelayMs(),
                     objectMapper
             );
         };

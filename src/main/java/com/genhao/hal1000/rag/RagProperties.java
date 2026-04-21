@@ -16,6 +16,10 @@ public class RagProperties {
     private int embeddingBatchSize = 16;
     private int maxExtractChars = 1_000_000;
     private int maxChunks = 2000;
+    private int embeddingMaxResponseBytes = 8_000_000;
+    private int embeddingRetryMaxAttempts = 6;
+    private int embeddingRetryBaseDelayMs = 1000;
+    private int embeddingRetryMaxDelayMs = 30000;
 
     /**
      * openai | gemini — independent of chat LLM provider.

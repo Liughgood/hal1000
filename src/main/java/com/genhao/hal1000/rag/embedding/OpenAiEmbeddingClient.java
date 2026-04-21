@@ -11,6 +11,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
 
 public class OpenAiEmbeddingClient implements EmbeddingClient {
 
@@ -19,21 +20,29 @@ public class OpenAiEmbeddingClient implements EmbeddingClient {
     private final String model;
     private final int timeoutSeconds;
     private final int batchSize;
+    private final int retryMaxAttempts;
+    private final int retryBaseDelayMs;
+    private final int retryMaxDelayMs;
 
     public OpenAiEmbeddingClient(
-            String baseUrl,
+            WebClient baseClient,
             String apiKey,
             String model,
             int timeoutSeconds,
             int batchSize,
+            int retryMaxAttempts,
+            int retryBaseDelayMs,
+            int retryMaxDelayMs,
             ObjectMapper objectMapper
     ) {
         this.objectMapper = objectMapper;
         this.model = model;
         this.timeoutSeconds = timeoutSeconds;
         this.batchSize = Math.max(1, batchSize);
-        var b = WebClient.builder()
-                .baseUrl(baseUrl == null || baseUrl.isBlank() ? "https://api.openai.com" : baseUrl)
+        this.retryMaxAttempts = Math.max(1, retryMaxAttempts);
+        this.retryBaseDelayMs = Math.max(50, retryBaseDelayMs);
+        this.retryMaxDelayMs = Math.max(this.retryBaseDelayMs, retryMaxDelayMs);
+        var b = baseClient.mutate()
                 .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE);
         if (apiKey != null && !apiKey.isBlank()) {
             b = b.defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey);
@@ -70,20 +79,7 @@ public class OpenAiEmbeddingClient implements EmbeddingClient {
             throw new IllegalStateException("serialize OpenAI embeddings request failed", e);
         }
         String json;
-        try {
-            json = client.post()
-                    .uri("/v1/embeddings")
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .bodyValue(jsonBody)
-                    .retrieve()
-                    .bodyToMono(String.class)
-                    .timeout(Duration.ofSeconds(timeoutSeconds))
-                    .block();
-        } catch (WebClientResponseException e) {
-            throw new IllegalStateException("OpenAI embeddings failed: " + e.getStatusCode() + " " + e.getResponseBodyAsString(), e);
-        } catch (RuntimeException e) {
-            throw new IllegalStateException("OpenAI embeddings request failed: " + e.getMessage(), e);
-        }
+        json = postWithRetry(jsonBody);
 
         try {
             JsonNode root = objectMapper.readTree(json);
@@ -111,6 +107,70 @@ public class OpenAiEmbeddingClient implements EmbeddingClient {
             throw e;
         } catch (Exception e) {
             throw new IllegalStateException("parse embeddings failed", e);
+        }
+    }
+
+    private String postWithRetry(String jsonBody) {
+        for (int attempt = 1; attempt <= retryMaxAttempts; attempt++) {
+            try {
+                return client.post()
+                        .uri("/v1/embeddings")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .bodyValue(jsonBody)
+                        .retrieve()
+                        .bodyToMono(String.class)
+                        .timeout(Duration.ofSeconds(timeoutSeconds))
+                        .block();
+            } catch (WebClientResponseException e) {
+                if (!isRetryable(e) || attempt == retryMaxAttempts) {
+                    throw new IllegalStateException("OpenAI embeddings failed: " + e.getStatusCode() + " " + e.getResponseBodyAsString(), e);
+                }
+                sleepBackoff(attempt, e);
+            } catch (RuntimeException e) {
+                if (attempt == retryMaxAttempts) {
+                    throw new IllegalStateException("OpenAI embeddings request failed: " + e.getMessage(), e);
+                }
+                sleepBackoff(attempt, null);
+            }
+        }
+        throw new IllegalStateException("OpenAI embeddings failed after retries");
+    }
+
+    private boolean isRetryable(WebClientResponseException e) {
+        int code = e.getStatusCode().value();
+        return code == 429 || code == 500 || code == 502 || code == 503 || code == 504;
+    }
+
+    private void sleepBackoff(int attempt, WebClientResponseException e) {
+        long delayMs = computeDelayMs(attempt, e);
+        try {
+            Thread.sleep(delayMs);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("interrupted while backing off for embeddings retry", ie);
+        }
+    }
+
+    private long computeDelayMs(int attempt, WebClientResponseException e) {
+        Long retryAfterMs = parseRetryAfterMs(e);
+        if (retryAfterMs != null && retryAfterMs > 0) {
+            return Math.min(retryAfterMs, retryMaxDelayMs);
+        }
+        long exp = (long) retryBaseDelayMs << Math.min(20, Math.max(0, attempt - 1));
+        long capped = Math.min(exp, (long) retryMaxDelayMs);
+        double jitter = 0.8 + ThreadLocalRandom.current().nextDouble() * 0.4;
+        return Math.max(50, (long) (capped * jitter));
+    }
+
+    private static Long parseRetryAfterMs(WebClientResponseException e) {
+        if (e == null) return null;
+        var ra = e.getHeaders().getFirst("Retry-After");
+        if (ra == null || ra.isBlank()) return null;
+        try {
+            long seconds = Long.parseLong(ra.trim());
+            return Math.max(0, seconds) * 1000L;
+        } catch (NumberFormatException ignored) {
+            return null;
         }
     }
 }

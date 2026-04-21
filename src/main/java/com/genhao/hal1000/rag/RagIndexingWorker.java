@@ -99,10 +99,30 @@ public class RagIndexingWorker {
             log.info("rag.index.done documentId={} conversationId={} chunks={}", documentId, conversationId, entities.size());
         } catch (Exception e) {
             doc.setStatus(RagDocumentStatus.failed);
-            doc.setErrorMessage(e.getMessage());
+            doc.setErrorMessage(summarizeException(e, 4000));
             documentRepository.save(doc);
-            log.warn("rag.index.failed documentId={} conversationId={} err={}", documentId, conversationId, e.toString());
+            log.warn("rag.index.failed documentId={} conversationId={}", documentId, conversationId, e);
         }
+    }
+
+    private static String summarizeException(Throwable t, int maxLen) {
+        if (t == null) return "unknown error";
+        var sb = new StringBuilder();
+        int depth = 0;
+        Throwable cur = t;
+        while (cur != null && depth < 8) {
+            if (!sb.isEmpty()) sb.append(" | caused by: ");
+            sb.append(cur.getClass().getSimpleName());
+            var msg = cur.getMessage();
+            if (msg != null && !msg.isBlank()) {
+                sb.append(": ").append(msg);
+            }
+            cur = cur.getCause();
+            depth++;
+        }
+        var out = sb.toString();
+        if (out.length() <= maxLen) return out;
+        return out.substring(0, Math.max(0, maxLen - 3)) + "...";
     }
 }
 

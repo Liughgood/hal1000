@@ -11,6 +11,7 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * Google Generative Language API: {@code :batchEmbedContents} when multiple texts, else {@code :embedContent}.
@@ -23,22 +24,30 @@ public class GeminiEmbeddingClient implements EmbeddingClient {
     private final String model;
     private final int timeoutSeconds;
     private final int batchSize;
+    private final int retryMaxAttempts;
+    private final int retryBaseDelayMs;
+    private final int retryMaxDelayMs;
 
     public GeminiEmbeddingClient(
-            String baseUrl,
+            WebClient baseClient,
             String apiKey,
             String model,
             int timeoutSeconds,
             int batchSize,
+            int retryMaxAttempts,
+            int retryBaseDelayMs,
+            int retryMaxDelayMs,
             ObjectMapper objectMapper
     ) {
-        var b = baseUrl == null || baseUrl.isBlank() ? "https://generativelanguage.googleapis.com" : baseUrl;
-        this.client = WebClient.builder().baseUrl(b).build();
+        this.client = baseClient;
         this.objectMapper = objectMapper;
         this.apiKey = apiKey;
         this.model = normalizeModel(model);
         this.timeoutSeconds = timeoutSeconds;
         this.batchSize = Math.max(1, batchSize);
+        this.retryMaxAttempts = Math.max(1, retryMaxAttempts);
+        this.retryBaseDelayMs = Math.max(50, retryBaseDelayMs);
+        this.retryMaxDelayMs = Math.max(this.retryBaseDelayMs, retryMaxDelayMs);
     }
 
     private static String normalizeModel(String model) {
@@ -102,20 +111,72 @@ public class GeminiEmbeddingClient implements EmbeddingClient {
         } catch (Exception e) {
             throw new IllegalStateException("serialize Gemini embedding request failed", e);
         }
+        for (int attempt = 1; attempt <= retryMaxAttempts; attempt++) {
+            try {
+                return client.post()
+                        .uri(uriBuilder -> uriBuilder
+                                .path("/v1beta/models/{model}" + actionSuffix)
+                                .queryParam("key", apiKey)
+                                .build(model))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .bodyValue(jsonBody)
+                        .retrieve()
+                        .bodyToMono(String.class)
+                        .timeout(Duration.ofSeconds(timeoutSeconds))
+                        .block();
+            } catch (WebClientResponseException e) {
+                if (!isRetryable(e) || attempt == retryMaxAttempts) {
+                    throw new IllegalStateException(
+                            "Gemini embeddings failed: " + e.getStatusCode() + " " + e.getResponseBodyAsString(), e);
+                }
+                sleepBackoff(attempt, e);
+            } catch (RuntimeException e) {
+                if (attempt == retryMaxAttempts) {
+                    throw new IllegalStateException("Gemini embeddings request failed: " + e.getMessage(), e);
+                }
+                sleepBackoff(attempt, (WebClientResponseException) null);
+            }
+        }
+        throw new IllegalStateException("Gemini embeddings failed after retries");
+    }
+
+    private boolean isRetryable(WebClientResponseException e) {
+        int code = e.getStatusCode().value();
+        return code == 429 || code == 500 || code == 502 || code == 503 || code == 504;
+    }
+
+    private void sleepBackoff(int attempt, WebClientResponseException e) {
+        long delayMs = computeDelayMs(attempt, e);
         try {
-            return client.post()
-                    .uri(uriBuilder -> uriBuilder
-                            .path("/v1beta/models/{model}" + actionSuffix)
-                            .queryParam("key", apiKey)
-                            .build(model))
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .bodyValue(jsonBody)
-                    .retrieve()
-                    .bodyToMono(String.class)
-                    .timeout(Duration.ofSeconds(timeoutSeconds))
-                    .block();
-        } catch (WebClientResponseException e) {
-            throw new IllegalStateException("Gemini embeddings failed: " + e.getStatusCode() + " " + e.getResponseBodyAsString(), e);
+            Thread.sleep(delayMs);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("interrupted while backing off for embeddings retry", ie);
+        }
+    }
+
+    private long computeDelayMs(int attempt, WebClientResponseException e) {
+        Long retryAfterMs = parseRetryAfterMs(e);
+        if (retryAfterMs != null && retryAfterMs > 0) {
+            return Math.min(retryAfterMs, retryMaxDelayMs);
+        }
+        // Exponential backoff with jitter: base * 2^(attempt-1) ± 20%
+        long exp = (long) retryBaseDelayMs << Math.min(20, Math.max(0, attempt - 1));
+        long capped = Math.min(exp, (long) retryMaxDelayMs);
+        double jitter = 0.8 + ThreadLocalRandom.current().nextDouble() * 0.4;
+        return Math.max(50, (long) (capped * jitter));
+    }
+
+    private static Long parseRetryAfterMs(WebClientResponseException e) {
+        if (e == null) return null;
+        var ra = e.getHeaders().getFirst("Retry-After");
+        if (ra == null || ra.isBlank()) return null;
+        try {
+            // Retry-After is usually seconds for 429
+            long seconds = Long.parseLong(ra.trim());
+            return Math.max(0, seconds) * 1000L;
+        } catch (NumberFormatException ignored) {
+            return null;
         }
     }
 
